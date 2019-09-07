@@ -14,7 +14,7 @@
 #include <lcd.h>
 
 //defines
-#define VERSION "V0.2"
+#define VERSION "V0.3"
 
 
 
@@ -34,6 +34,8 @@
 #define L_USB 29 //D5
 
 #define PIC_DIR "/boot/lisy/picpgm/"
+#define USB_MOUNT_DIR "/pinmame/usb1/"
+#define USB_DEVICE "/dev/sda1"
 
 
 
@@ -46,6 +48,7 @@
   char eeprom[80] = "EEPROM:";
   char cur_selection = 3; //current file selection
   static char files[100][80]; //space for 100 filenames
+  char current_dir[80];  //current directory
 
 //simple debounce and 'long hold' routine
 //returns:
@@ -98,7 +101,7 @@ return -1;
 }
 
 
-//control all leds
+//control all leds, except USB indicator
 //0 -> OFF
 //1 -> ON
 //2 -> toggle
@@ -114,14 +117,12 @@ switch(cmd)
    digitalWrite ( L_WAITING, 0);
    digitalWrite ( L_BUSY, 0);
    digitalWrite ( L_ERROR, 0);
-   digitalWrite ( L_USB, 0);
   break;
   case 1:
    digitalWrite ( L_READY, 1);
    digitalWrite ( L_WAITING, 1);
    digitalWrite ( L_BUSY, 1);
    digitalWrite ( L_ERROR, 1);
-   digitalWrite ( L_USB, 1);
   break;
   case 2:
  if(status)
@@ -130,7 +131,6 @@ switch(cmd)
    digitalWrite ( L_WAITING, 0);
    digitalWrite ( L_BUSY, 0);
    digitalWrite ( L_ERROR, 0);
-   digitalWrite ( L_USB, 0);
    status = 0;
  }
  else
@@ -139,7 +139,6 @@ switch(cmd)
    digitalWrite ( L_WAITING, 1);
    digitalWrite ( L_BUSY, 1);
    digitalWrite ( L_ERROR, 1);
-   digitalWrite ( L_USB, 1);
    status = 1;
  }
  break;
@@ -155,6 +154,14 @@ void set_led(unsigned char led)
 
 }
 
+//control one led
+void ctrl_led(unsigned char led, unsigned char action)
+{
+  digitalWrite ( led, action);
+
+}
+
+
 
 //do then programmin
 //with the current selected file
@@ -168,7 +175,7 @@ int do_prg(void)
   char message[256];
   int exit_code;
 
-  sprintf(cmd,"/usr/bin/picpgm -p %s%s",PIC_DIR,files[cur_selection] );
+  sprintf(cmd,"/usr/bin/picpgm -p %s%s",current_dir,files[cur_selection] );
   fp = popen(cmd, "r");
 
    while ( fgets(str, sizeof(str)-1, fp) != NULL)
@@ -254,6 +261,7 @@ void show_selection(int cmd)
 {
   int i = 0;
   DIR *d;
+  char str[255];
   struct dirent *dir;
   static int no_of_files = 0;
 
@@ -261,16 +269,25 @@ void show_selection(int cmd)
  {
   case 0:
   //read the whole dir
-  d = opendir(PIC_DIR);
+  d = opendir(current_dir);
 
   if (d)
     {
         while ((dir = readdir(d)) != NULL)
         {
              {
-                strcpy(files[i],dir->d_name);
-		printf("%s\n",files[i]);
-		++i;
+		//check for .hex extension
+		if (strlen(dir->d_name) >= 5)
+                  {
+                    strcpy(str,dir->d_name);
+		    printf("check: %s\n",str);
+		    if (strncmp( &str[strlen(str)-4],".hex",4) == 0)
+			{
+                	 strcpy(files[i],dir->d_name);
+			 printf("match: %s\n",files[i]);
+		         ++i;
+			}//match
+                  } //strlen >= 5
              }
         }
         no_of_files = i -1;
@@ -286,13 +303,90 @@ void show_selection(int cmd)
    break;
  }
 
-
-  lcdPosition (lcdHandle, 0, 0) ; lcdPrintf (lcdHandle, "%-32s",files[cur_selection]) ;
+if(no_of_files >= 1)
+  {
+  lcdPosition (lcdHandle, 0, 0);
+  lcdPrintf (lcdHandle, "%-32s",files[cur_selection]) ;
+  }
+else
+  {
+  lcdPuts (lcdHandle, "no .hex files   ") ;
+  lcdPosition (lcdHandle, 0, 1);
+  lcdPuts (lcdHandle, "  found         ") ;
+  }
 
 }
 
 
+//try to mount th usb_stick
+//set led and current_dir accordantly
+int do_usb(void)
+{
+  FILE *fp;
+  char cmd[80];
+  char str[255];
+  int exit_code;
+  static char mounted = 0;
 
+  if(mounted) //already mounted, do unmount
+  {
+
+  printf("USB mounted, try to unmount\n");
+
+  //change current directory to be able to unmount
+  //sprintf(cmd,"cd %s",PIC_DIR);
+  //system(cmd);
+
+  sprintf(cmd,"/bin/umount %s",USB_DEVICE);
+  fp = popen(cmd, "r");
+
+   while ( fgets(str, sizeof(str)-1, fp) != NULL)
+   {
+     printf("%s\n",str);
+   }
+   exit_code = WEXITSTATUS(pclose(fp));
+
+  printf("exit code mount was:%d\n",exit_code);
+
+  if ( exit_code == 0 )
+   {
+     lcdPosition (lcdHandle, 0, 0) ; lcdPuts (lcdHandle, "USB unmount OK  ") ;
+     lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "press OK to sel.") ;
+     ctrl_led(L_USB,0);
+     strcpy(current_dir,PIC_DIR);
+     mounted = 0;
+   }
+  else { lcdPosition (lcdHandle, 0, 0) ; lcdPrintf (lcdHandle, "%-32s",str) ; }
+  }
+  else //do the mount
+  {
+  printf("try to mount USB\n");
+
+  sprintf(cmd,"/bin/mount %s %s -o ro",USB_DEVICE,USB_MOUNT_DIR);
+  fp = popen(cmd, "r");
+
+   while ( fgets(str, sizeof(str)-1, fp) != NULL)
+   {
+     printf("%s\n",str);
+   }
+   exit_code = WEXITSTATUS(pclose(fp));
+
+  printf("exit code mount was:%d\n",exit_code);
+
+  if ( exit_code ==0 )
+   {
+     lcdPosition (lcdHandle, 0, 0) ; lcdPuts (lcdHandle, "USB dev mount OK") ;
+     lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "press OK to sel.") ;
+     ctrl_led(L_USB,1);
+     strcpy(current_dir,USB_MOUNT_DIR);
+     mounted = 1;
+   }
+  else { lcdPosition (lcdHandle, 0, 0) ; lcdPrintf (lcdHandle, "%-32s",str) ; }
+   }
+
+  return exit_code;
+
+}
 
 int main (int argc, char *argv[])
 {
@@ -327,6 +421,8 @@ pinMode ( L_BUSY, OUTPUT);
 pinMode ( L_ERROR, OUTPUT);
 pinMode ( L_USB, OUTPUT);
 ctrl_leds(0);
+ctrl_led(L_USB,0);
+
 
 
 //    int  lcdInit (int rows, int cols, int bits, int rs, int strb,
@@ -344,8 +440,8 @@ ctrl_leds(0);
   //lcdPosition (lcdHandle, 0, 0) ; lcdPuts (lcdHandle, "picpgm Menu V1.0") ;
   lcdPosition (lcdHandle, 0, 0) ; lcdPrintf (lcdHandle, "picpgm Menu %s",VERSION) ;
   lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "  by bontango   ") ;
-  sleep(1); ctrl_leds(1);
-  sleep(1); ctrl_leds(0);
+  sleep(1); ctrl_leds(1); ctrl_led(L_USB,1);
+  sleep(1); ctrl_leds(0); ctrl_led(L_USB,0);
 /*
   sleep(1); ctrl_leds(1);
   sleep(1); ctrl_leds(0);
@@ -357,6 +453,9 @@ ctrl_leds(0);
 
   //state machine
   //state = 0;
+
+  //init vars
+  strcpy(current_dir,PIC_DIR);
 
   //loop for checking all switches
   while(1) {
@@ -380,6 +479,10 @@ ctrl_leds(0);
       case S_PRG:
         set_led ( L_BUSY);
 	if ( do_prg() == 0) set_led ( L_READY); else set_led ( L_ERROR);
+	break;
+      case S_USB:
+        set_led ( L_BUSY);
+	if ( do_usb() == 0) set_led ( L_READY); else set_led ( L_ERROR);
 	break;
       default:
           printf("switch %d pressed\n",switch_pressed);
