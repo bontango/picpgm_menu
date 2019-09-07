@@ -1,7 +1,7 @@
 //picpgm_menu.c
 // menu for picpgm
 
-
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -14,7 +14,7 @@
 #include <lcd.h>
 
 //defines
-#define VERSION "V1.0"
+#define VERSION "V0.2"
 
 
 
@@ -33,10 +33,19 @@
 #define L_ERROR 11 //D4
 #define L_USB 29 //D5
 
+#define PIC_DIR "/boot/lisy/picpgm/"
 
 
-// Global lcd handle:
-static int lcdHandle ;
+
+
+  // Global vars:
+  static int lcdHandle ;
+  char name[80]   = "PIC name:";
+  char id[80]     = "Device ID:";
+  char flash[80]  = "Flash:";
+  char eeprom[80] = "EEPROM:";
+  char cur_selection = 3; //current file selection
+  static char files[100][80]; //space for 100 filenames
 
 //simple debounce and 'long hold' routine
 //returns:
@@ -68,6 +77,24 @@ time_passed = millis() - time_pressed;
 if ( time_passed > 800) return PIN_PRESSED_LONG; else return PIN_PRESSED_SHORT;
 
 
+}
+
+//return closed switchnumber
+//from an array of dip numbers with len number
+//first match
+//returns switchnumber or -1 if no switch pressed
+int check_switches( unsigned char *pin, int number)
+{
+
+ int i,status;
+
+ for ( i=0; i<number; i++)
+ {
+   status = get_switch_status(pin[i]);
+   if (status) return (pin[i]);
+ }
+
+return -1;
 }
 
 
@@ -119,24 +146,163 @@ switch(cmd)
 }//switch
 }
 
-//interrupt routines
-void myInterrupt1 (void) { printf("switch 1 pressed\n"); }
-void myInterrupt2 (void) { printf("switch 2 pressed\n"); }
-void myInterrupt3 (void) { printf("switch 3 pressed\n"); }
-void myInterrupt4 (void) { printf("switch 4 pressed\n"); }
-void myInterrupt5 (void) { printf("switch 5 pressed\n"); }
-void myInterrupt6 (void) { printf("switch 6 pressed\n"); }
-void myInterrupt7 (void) { printf("switch 7 pressed\n"); }
-void myInterrupt8 (void) { printf("switch 8 pressed\n"); }
+//set one led
+//all others off
+void set_led(unsigned char led)
+{
+  ctrl_leds(0);
+  digitalWrite ( led, 1);
+
+}
+
+
+//do then programmin
+//with the current selected file
+int do_prg(void)
+{
+
+
+  FILE *fp;
+  char cmd[256];
+  char str[256];
+  char message[256];
+  int exit_code;
+
+  sprintf(cmd,"/usr/bin/picpgm -p %s%s",PIC_DIR,files[cur_selection] );
+  fp = popen(cmd, "r");
+
+   while ( fgets(str, sizeof(str)-1, fp) != NULL)
+   {
+     printf("%s\n",str);
+   }
+   exit_code = WEXITSTATUS(pclose(fp));
+
+  switch(exit_code)
+  {
+   case 0: strcpy(message,"PIC succesfully programmed"); break;
+   case 1: strcpy(message,"verify error occured"); break;
+   case 2: strcpy(message,"no programmer interface found"); break;
+   case 3: strcpy(message,"no PIC found"); break;
+   case 4: strcpy(message,"invalid parameter"); break;
+   case 5: strcpy(message,"HEX file has errors"); break;
+   case 6: strcpy(message,"problems with loading port I/O driver"); break;
+   case 7: strcpy(message,"no HEX file specified"); break;
+   default: sprintf(message,"unexpected error occoured:%d ",exit_code); break;
+  }
+
+      lcdPosition (lcdHandle, 0, 0) ; lcdPrintf (lcdHandle, "%-32s",message) ;
+
+  return exit_code;
+
+}
+
+
+//let picpgm atodetect the PIC
+int do_autodetect(void) 
+{
  
+  FILE *fp;
+  char str[256];
+  char str1[256];
+  char str2[256];
+  int exit_code;
+
+  fp = popen("/usr/bin/picpgm -r", "r");
+
+   while ( fgets(str, sizeof(str)-1, fp) != NULL)
+   {
+     //look for the key words
+     if ( strncmp(str,name,9) == 0)
+      {
+        sscanf(str,"%s %s %s",str1,str2,name);
+      }
+     if ( strncmp(str,id,10) == 0)
+      {
+        sscanf(str,"%s %s %s",str1,str2,id);
+      }
+     if ( strncmp(str,flash,6) == 0)
+      {
+        sscanf(str,"%s %s",str1,flash);
+      }
+     if ( strncmp(str,eeprom,7) == 0)
+      {
+        sscanf(str,"%s %s",str1,eeprom);
+      }
+   }
+
+   exit_code = WEXITSTATUS(pclose(fp));
+
+   if (exit_code == 0)
+     {
+      lcdPosition (lcdHandle, 0, 0) ; lcdPuts (lcdHandle, " detected PIC:  ") ;
+      lcdPosition (lcdHandle, 0, 1) ; lcdPrintf (lcdHandle, "%16s",name) ;
+     }
+   else
+     {
+      lcdPosition (lcdHandle, 0, 0) ; lcdPuts (lcdHandle, " cannot identify") ;
+      lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "  PIC in socket ") ;
+     }
+
+ return exit_code;
+}
+
+//show_selection
+//0 - initial read of directory give back number of files
+//1 - step one down
+//-1 - step one up
+void show_selection(int cmd)
+{
+  int i = 0;
+  DIR *d;
+  struct dirent *dir;
+  static int no_of_files = 0;
+
+ switch (cmd)
+ {
+  case 0:
+  //read the whole dir
+  d = opendir(PIC_DIR);
+
+  if (d)
+    {
+        while ((dir = readdir(d)) != NULL)
+        {
+             {
+                strcpy(files[i],dir->d_name);
+		printf("%s\n",files[i]);
+		++i;
+             }
+        }
+        no_of_files = i -1;
+        closedir(d);
+     }
+   cur_selection = 2;
+   break;
+  case 1:
+   if ( cur_selection < no_of_files ) cur_selection++;
+   break;
+  case -1:
+   if ( cur_selection > 0 ) cur_selection--;
+   break;
+ }
+
+
+  lcdPosition (lcdHandle, 0, 0) ; lcdPrintf (lcdHandle, "%-32s",files[cur_selection]) ;
+
+}
+
+
+
+
 int main (int argc, char *argv[])
 {
 
+ int switch_pressed;
+ unsigned char switches[] = { S_LEFT,S_UP,S_ENTER,S_DOWN,S_RIGHT,S_USB,S_DETECT,S_PRG};
 
   wiringPiSetup () ;
 
 //init switches
-/*
 pinMode ( S_LEFT, INPUT);
 pinMode ( S_UP, INPUT);
 pinMode ( S_ENTER, INPUT);
@@ -153,17 +319,6 @@ pullUpDnControl ( S_RIGHT, PUD_UP);
 pullUpDnControl ( S_USB, PUD_UP);
 pullUpDnControl ( S_DETECT, PUD_UP);
 pullUpDnControl ( S_PRG, PUD_UP);
-*/
-unsigned char switches[8] = { S_LEFT,S_UP,S_ENTER,S_DOWN,S_RIGHT,S_USB,S_DETECT,S_PRG};
-  wiringPiISR (switches[0], INT_EDGE_FALLING, &myInterrupt1) ;
-  wiringPiISR (switches[1], INT_EDGE_FALLING, &myInterrupt2) ;
-  wiringPiISR (switches[2], INT_EDGE_FALLING, &myInterrupt3) ;
-  wiringPiISR (switches[3], INT_EDGE_FALLING, &myInterrupt4) ;
-  wiringPiISR (switches[4], INT_EDGE_FALLING, &myInterrupt5) ;
-  wiringPiISR (switches[5], INT_EDGE_FALLING, &myInterrupt6) ;
-  wiringPiISR (switches[6], INT_EDGE_FALLING, &myInterrupt7) ;
-  wiringPiISR (switches[7], INT_EDGE_FALLING, &myInterrupt8) ;
-
 
 //init LEDs
 pinMode ( L_READY, OUTPUT);
@@ -191,15 +346,46 @@ ctrl_leds(0);
   lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "  by bontango   ") ;
   sleep(1); ctrl_leds(1);
   sleep(1); ctrl_leds(0);
+/*
   sleep(1); ctrl_leds(1);
   sleep(1); ctrl_leds(0);
   sleep(1); ctrl_leds(1);
   sleep(1); ctrl_leds(0);
-  lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "    READY!      ") ;
+*/
+  lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "press OK to sel.") ;
   digitalWrite ( L_READY, 1);
+
+  //state machine
+  //state = 0;
 
   //loop for checking all switches
   while(1) {
+
+    if ( ( switch_pressed = check_switches(switches, 8)) >= 0)
+    {
+    switch(switch_pressed) {
+      case S_DETECT:
+        set_led ( L_BUSY);
+	if ( do_autodetect() == 0) set_led ( L_READY); else set_led ( L_ERROR);
+	break;
+      case S_ENTER:
+           show_selection(0);
+	break;
+      case S_DOWN:
+           show_selection(1);
+	break;
+      case S_UP:
+           show_selection(-1);
+	break;
+      case S_PRG:
+        set_led ( L_BUSY);
+	if ( do_prg() == 0) set_led ( L_READY); else set_led ( L_ERROR);
+	break;
+      default:
+          printf("switch %d pressed\n",switch_pressed);
+	break;
+     }
+  }//if switch pressed
 
   };
 }
