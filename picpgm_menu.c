@@ -381,8 +381,12 @@ int do_usb(void)
      strcpy(current_dir,USB_MOUNT_DIR);
      mounted = 1;
    }
-  else { lcdPosition (lcdHandle, 0, 0) ; lcdPrintf (lcdHandle, "%-32s",str) ; }
+  else
+   {
+     lcdPosition (lcdHandle, 0, 0) ; lcdPuts (lcdHandle, "could not mount ") ;
+     lcdPosition (lcdHandle, 0, 1) ; lcdPuts (lcdHandle, "USB device      ") ;
    }
+  }
 
   return exit_code;
 
